@@ -1,27 +1,31 @@
+
 /*
  * ╔══════════════════════════════════════════════════════════════════╗
  * ║      SeismoGuard — P/S Wave Early Warning System                ║
  * ║                  Academic Capstone Project                      ║
  * ╠══════════════════════════════════════════════════════════════════╣
- * ║  FIXES IN THIS VERSION:                                          ║
+ * ║  CHANGES IN THIS VERSION:                                        ║
  * ║                                                                  ║
- * ║  1. UDP FLOODING FIXED                                           ║
- * ║     Old: EARTHQUAKE! sent every 100ms → 10 DB rows/sec          ║
- * ║     Fix: EARTHQUAKE! sent every 5s max → 12 DB rows/min         ║
- * ║     Fix: WARNING      sent every 2s max                          ║
- * ║     Fix: NORMAL       sent every 2s max                          ║
+ * ║  1. P-WAVE THRESHOLD LOWERED                                     ║
+ * ║     P_DIRECT_THRESH : 0.5g → 0.7g  (detects at 0.7–0.9g)       ║
  * ║                                                                  ║
- * ║  2. THRESHOLDS RAISED TO STANDARD                                ║
- * ║     P_DIRECT_THRESH : 1.0g → 1.8g                               ║
- * ║     P_RATIO_THRESH  : 3.0  → 4.0                                ║
- * ║     P_CONFIRM_SECS  : 1s   → 2s                                  ║
- * ║     S_WAVE_THRESH   : 1.5g → 2.2g  (shake harder for EQ)        ║
- * ║     S_CONFIRM_SECS  : 1s   → 2s                                  ║
+ * ║  2. S-WAVE THRESHOLD LOWERED                                     ║
+ * ║     S_WAVE_THRESH   : 1.0g → 0.9g  (detects at 0.9–1.5g)       ║
  * ║                                                                  ║
- * ║  3. CONTINUOUS ALARMING FIXED                                    ║
- * ║     Beep fires once per event (one-shot flags, unchanged)        ║
- * ║     UDP throttling means dashboard quake count increments        ║
- * ║     slowly → modal no longer re-fires every 3s refresh           ║
+ * ║  3. P→S WINDOW SHORTENED                                         ║
+ * ║     P_TO_S_SECS     : 20s  → 15s                                ║
+ * ║                                                                  ║
+ * ║  4. S-WAVE LOCKED OUT DURING P-WAVE WINDOW                      ║
+ * ║     Even if H ≥ S_WAVE_THRESH, system stays in P-WAVE state     ║
+ * ║     for the full 15s. S-wave detection only begins after 15s.   ║
+ * ║                                                                  ║
+ * ║  5. BEEP DURATIONS FIXED                                         ║
+ * ║     P-wave beep : ~3 seconds  (was ~0.8s)                       ║
+ * ║     S-wave beep : ~5 seconds  (was ~1.2s)                       ║
+ * ║                                                                  ║
+ * ║  6. SWAVE DISPLAY TIMER                                          ║
+ * ║     After S-wave confirmed, system shows event for 10s           ║
+ * ║     then automatically returns to NORMAL regardless of sensor    ║
  * ╚══════════════════════════════════════════════════════════════════╝
  */
 
@@ -58,11 +62,11 @@ WiFiUDP udp;
 #define LTA_LEN           100      // 10s long-term → 10s calibration
 
 // ── P-WAVE THRESHOLDS ─────────────────────────────────────────────────────
-// Raised: need a meaningful vertical shake to trigger, not a tap
-#define P_DIRECT_THRESH   1.5f     // filtVertDiff must reach 1.8g
+// CHANGED: lowered to 0.7g so it detects at 0.7–0.9g range
+#define P_DIRECT_THRESH   0.7f     // filtVertDiff must reach 0.7g  ← CHANGED (was 0.5)
 #define P_RATIO_THRESH    4.0f     // OR STA/LTA ratio ≥ 4.0
-#define P_CONFIRM_SECS    3        // must sustain for 2 full seconds
-#define P_CONFIRM_COUNT   (P_CONFIRM_SECS * (1000 / SAMPLE_MS))   // 20 samples
+#define P_CONFIRM_SECS    3
+#define P_CONFIRM_COUNT   (P_CONFIRM_SECS * (1000 / SAMPLE_MS))   // 30 samples
 
 // False-alarm cancellation
 #define FALSE_ALARM_SECS  3
@@ -70,28 +74,29 @@ WiFiUDP udp;
 #define QUIET_THRESHOLD   0.08f
 
 // ── S-WAVE THRESHOLDS ─────────────────────────────────────────────────────
-// Raised significantly: must shake noticeably harder than P-wave level
-#define S_WAVE_THRESH     1.8f     // filtHorizMag must reach 2.2g
-#define S_CONFIRM_SECS    4       // must sustain for 2 full seconds
-#define S_CONFIRM_COUNT   (S_CONFIRM_SECS * (1000 / SAMPLE_MS))   // 20 samples
+// CHANGED: lowered to 0.9g so it detects at 0.9–1.5g range
+#define S_WAVE_THRESH     0.9f     // filtHorizMag must reach 0.9g  ← CHANGED (was 1.0)
+#define S_CONFIRM_SECS    4
+#define S_CONFIRM_COUNT   (S_CONFIRM_SECS * (1000 / SAMPLE_MS))   // 40 samples
 
 // ── TIMING ────────────────────────────────────────────────────────────────
-#define P_TO_S_SECS       20
+// CHANGED: 15 seconds P→S window (was 20)
+#define P_TO_S_SECS       15                                        // ← CHANGED (was 20)
 
-// Buzzer auto-silence 5s after earthquake alarm
+// CHANGED: S-wave event displayed for 10 seconds then auto-resets
+#define SWAVE_DISPLAY_MS  10000UL                                   // ← NEW
+
+// Buzzer auto-silence after earthquake alarm
 #define EQ_BEEP_STOP_MS   5000UL
 
 // Calm reset
 #define CALM_SECS         5
 #define CALM_COUNT        (CALM_SECS * (1000 / SAMPLE_MS))        // 50 samples
 
-// ── UDP SEND INTERVALS — THIS IS THE KEY FIX FOR DB FLOODING ─────────────
-// Old code had no throttle in SWAVE_CONFIRMED:
-//   sendUDP() called every 100ms → 10 packets/s → 600 DB rows/min
-// Now each state has its own minimum interval between sends:
-#define UDP_NORMAL_INTERVAL   2000UL   // NORMAL    → send every 2s
-#define UDP_WARNING_INTERVAL  2000UL   // WARNING   → send every 2s
-#define UDP_EQ_INTERVAL       5000UL   // EARTHQUAKE→ send every 5s (was 0!)
+// ── UDP SEND INTERVALS ────────────────────────────────────────────────────
+#define UDP_NORMAL_INTERVAL   2000UL
+#define UDP_WARNING_INTERVAL  2000UL
+#define UDP_EQ_INTERVAL       5000UL
 
 // ─────────────────────────────────────────────────────────────────────────
 // STATE MACHINE
@@ -129,13 +134,14 @@ int calmCount     = 0;
 // ── One-shot beep flags ───────────────────────────────────────────────────
 bool warnBeepDone = false;
 bool eqBeepDone   = false;
-bool alertSentThisEvent = false; // Add this line
+bool alertSentThisEvent = false;
 
 // ── Timestamps ────────────────────────────────────────────────────────────
 unsigned long pWaveTime     = 0;
 unsigned long eqBeepTime    = 0;
+unsigned long swaveStartTime = 0;  // ← NEW: tracks when S-wave was confirmed
 unsigned long lastLcdUpdate = 0;
-unsigned long lastUdpSend   = 0;   // unified UDP throttle timestamp
+unsigned long lastUdpSend   = 0;
 unsigned long lastLoop      = 0;
 unsigned long lastReminder  = 0;
 
@@ -189,12 +195,9 @@ void beep(int times, int onMs, int offMs) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// sendUDP — only sends if enough time has passed since last send
-// interval = UDP_NORMAL_INTERVAL / UDP_WARNING_INTERVAL / UDP_EQ_INTERVAL
-// ─────────────────────────────────────────────────────────────────────────
 bool sendUDP(const char* status, float value, int eta, unsigned long interval) {
   unsigned long now = millis();
-  if (now - lastUdpSend < interval) return false;   // too soon — skip
+  if (now - lastUdpSend < interval) return false;
   lastUdpSend = now;
 
   char msg[80];
@@ -218,21 +221,16 @@ void resetAllCounters() {
   calmCount     = 0;
   warnBeepDone  = false;
   eqBeepDone    = false;
-  alertSentThisEvent = false; // Add this line
+  alertSentThisEvent = false;
   digitalWrite(LED_PIN,    LOW);
   digitalWrite(BUZZER_PIN, LOW);
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// isPWaveSignal — direct threshold OR STA/LTA ratio
-// Vertical dominance check removed (blocks hand-shaking demos)
-// ─────────────────────────────────────────────────────────────────────────
 bool isPWaveSignal() {
   return (filtVertDiff >= P_DIRECT_THRESH) || (staltaRatio >= P_RATIO_THRESH);
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// calibrate — 10 seconds
 // ─────────────────────────────────────────────────────────────────────────
 void calibrate() {
   Serial.println("[*] Calibrating 10s noise floor...");
@@ -273,8 +271,6 @@ void calibrate() {
   Serial.println("[*] Calibration done.");
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// setup
 // ─────────────────────────────────────────────────────────────────────────
 void setup() {
   Serial.begin(115200);
@@ -331,9 +327,10 @@ void setup() {
   beep(1, 400, 0);
 
   Serial.println("\n[*] Ready. Thresholds:");
-  Serial.println("    P-wave : V >= 1.8g  OR  STA/LTA >= 4.0,  2s sustained");
-  Serial.println("    S-wave : H >= 2.2g,  2s sustained");
-  Serial.println("    UDP    : NORMAL=2s  WARNING=2s  EARTHQUAKE=5s intervals");
+  Serial.println("    P-wave : V >= 0.7g  OR  STA/LTA >= 4.0,  3s sustained");
+  Serial.println("    S-wave : H >= 0.9g,  4s sustained  (only after 15s P window)");
+  Serial.println("    Beeps  : P-wave ~3s  |  S-wave ~5s");
+  Serial.println("    Display: S-wave event shown for 10s then auto-reset");
   Serial.println("──────────────────────────────────────────────────────────");
 
   lastLoop = millis();
@@ -356,13 +353,12 @@ void loop() {
   filtVertDiff = LPF_ALPHA * filtVertDiff + (1.0f - LPF_ALPHA) * rawVert;
   filtHorizMag = LPF_ALPHA * filtHorizMag + (1.0f - LPF_ALPHA) * rawHoriz;
 
-  // --- ADDED FLOOR LOGIC START ---
+  // Floor logic during calm states
   if (state == CALMING || state == SWAVE_CONFIRMED) {
-      if (filtVertDiff < 0.05f) filtVertDiff = 0.0f; 
-      if (filtHorizMag < 0.05f) filtHorizMag = 0.0f;
-  } 
-  // --- ADDED FLOOR LOGIC END ---
-  
+    if (filtVertDiff < 0.05f) filtVertDiff = 0.0f;
+    if (filtHorizMag < 0.05f) filtHorizMag = 0.0f;
+  }
+
   staltaRatio = updateSTALTA(filtVertDiff);
 
   // ─────────────────────────────────────────────────────────────────────
@@ -388,9 +384,10 @@ void loop() {
           pConfirmCount = 0;
           pQuietCount   = 0;
           digitalWrite(LED_PIN, HIGH);
-          if (!warnBeepDone) { beep(2, 300, 200); warnBeepDone = true; }
+          // ── CHANGED: P-wave beep ~3 seconds (6×400ms on + 100ms off = 3s) ──
+          if (!warnBeepDone) { beep(6, 400, 100); warnBeepDone = true; }
           Serial.println("[!] P-WAVE CONFIRMED");
-          sendUDP("WARNING", filtVertDiff, P_TO_S_SECS, 0); // immediate on confirm
+          sendUDP("WARNING", filtVertDiff, P_TO_S_SECS, 0);
           lcdLine(0, "P-WAVE DETECTED!");
           lcdLine(1, "TAKE COVER NOW! ");
         } else {
@@ -398,7 +395,6 @@ void loop() {
         }
       }
 
-      // NORMAL: send at most every 2 seconds
       sendUDP("NORMAL", filtVertDiff, 0, UDP_NORMAL_INTERVAL);
 
       if (now - lastLcdUpdate >= 500) {
@@ -433,8 +429,9 @@ void loop() {
           pConfirmCount = 0;
           pQuietCount   = 0;
           digitalWrite(LED_PIN, HIGH);
-          if (!warnBeepDone) { beep(2, 300, 200); warnBeepDone = true; }
-          Serial.println("[!] P-WAVE CONFIRMED (2s sustained)");
+          // ── CHANGED: P-wave beep ~3 seconds ──────────────────────────
+          if (!warnBeepDone) { beep(6, 400, 100); warnBeepDone = true; }
+          Serial.println("[!] P-WAVE CONFIRMED (sustained)");
           sendUDP("WARNING", filtVertDiff, P_TO_S_SECS, 0);
           lcdLine(0, "P-WAVE DETECTED!");
           lcdLine(1, "TAKE COVER NOW! ");
@@ -446,7 +443,6 @@ void loop() {
         }
       }
 
-      // WARNING while detecting: max every 2s
       sendUDP("WARNING", filtVertDiff, P_TO_S_SECS, UDP_WARNING_INTERVAL);
 
       if (now - lastLcdUpdate >= 500) {
@@ -465,41 +461,55 @@ void loop() {
       unsigned long elapsed = now - pWaveTime;
       int etaSec = max(0, (int)((P_TO_S_SECS * 1000UL - elapsed) / 1000));
 
-      if (filtHorizMag >= S_WAVE_THRESH) {
-        sConfirmCount++;
-        Serial.print("[?] S-wave building H="); Serial.print(filtHorizMag, 3);
-        Serial.print(" cnt="); Serial.println(sConfirmCount);
+      // ── KEY FIX: S-wave detection is LOCKED during the 15s P-wave window.
+      // Even if H ≥ S_WAVE_THRESH, we stay in P-WAVE state and keep counting
+      // down. S-wave check only begins after the full 15s has elapsed.
+      if (elapsed >= (unsigned long)(P_TO_S_SECS * 1000)) {
 
-        if (sConfirmCount >= S_CONFIRM_COUNT) {
-          state         = SWAVE_CONFIRMED;
-          calmCount     = 0;
-          sConfirmCount = 0;
-          if (!eqBeepDone) {
-            beep(5, 150, 80);
-            eqBeepTime = now;
-            eqBeepDone = true;
+        // 15s window is over — now check for S-wave
+        if (filtHorizMag >= S_WAVE_THRESH) {
+          sConfirmCount++;
+          Serial.print("[?] S-wave check H="); Serial.print(filtHorizMag, 3);
+          Serial.print(" cnt="); Serial.println(sConfirmCount);
+
+          if (sConfirmCount >= S_CONFIRM_COUNT) {
+            state          = SWAVE_CONFIRMED;
+            swaveStartTime = now;   // ← record when we entered S-wave
+            calmCount      = 0;
+            sConfirmCount  = 0;
+            // ── CHANGED: S-wave beep ~5 seconds (10×400ms on + 100ms off = 5s) ──
+            if (!eqBeepDone) {
+              beep(10, 400, 100);
+              eqBeepTime = now;
+              eqBeepDone = true;
+            }
+            Serial.println("[!!] S-WAVE CONFIRMED — EARTHQUAKE!");
+            sendUDP("EARTHQUAKE!", filtHorizMag, 0, 0);
+            lcdLine(0, "!! EARTHQUAKE !!");
+            lcdLine(1, "S-WAVE CONFIRMED");
+            break;
           }
-          Serial.println("[!!] S-WAVE CONFIRMED — EARTHQUAKE!");
-          sendUDP("EARTHQUAKE!", filtHorizMag, 0, 0); // immediate on confirm
-          lcdLine(0, "!! EARTHQUAKE !!");
-          lcdLine(1, "S-WAVE CONFIRMED");
+        } else {
+          sConfirmCount = 0;
+          // No S-wave activity after 15s window — stand down
+          Serial.println("[*] 15s window expired, no S-wave. Calming.");
+          state = CALMING; calmCount = 0;
+          digitalWrite(LED_PIN, LOW);
           break;
         }
+
       } else {
-        sConfirmCount = 0;
+        // Still inside the 15s P-wave window — S-wave detection is BLOCKED.
+        // Log if H is high but do NOT transition.
+        if (filtHorizMag >= S_WAVE_THRESH) {
+          Serial.print("[~] H="); Serial.print(filtHorizMag, 3);
+          Serial.println(" (S-thresh crossed but locked — still in P-wave window)");
+        }
       }
 
-      if (elapsed >= (unsigned long)(P_TO_S_SECS * 1000)) {
-        Serial.println("[*] 20s window expired. Calming.");
-        state = CALMING; calmCount = 0;
-        digitalWrite(LED_PIN, LOW);
-        break;
-      }
-
-      // Reminder every 10s
+      // Reminder beep every 10s while in P-wave window
       if (now - lastReminder >= 10000) { beep(1, 150, 0); lastReminder = now; }
 
-      // WARNING: max every 2s
       sendUDP("WARNING", filtVertDiff, etaSec, UDP_WARNING_INTERVAL);
 
       if (now - lastLcdUpdate >= 500) {
@@ -516,35 +526,36 @@ void loop() {
     case SWAVE_CONFIRMED: {
       digitalWrite(LED_PIN, HIGH);
 
+      // Stop buzzer after 5 seconds
       if (eqBeepDone && (now - eqBeepTime >= EQ_BEEP_STOP_MS)) {
         digitalWrite(BUZZER_PIN, LOW);
       }
 
-      if (!alertSentThisEvent) { 
-        if(sendUDP("EARTHQUAKE!", filtHorizMag, 0, UDP_EQ_INTERVAL)) {
-            alertSentThisEvent = true; // Prevents the dashboard from flooding
+      if (!alertSentThisEvent) {
+        if (sendUDP("EARTHQUAKE!", filtHorizMag, 0, UDP_EQ_INTERVAL)) {
+          alertSentThisEvent = true;
         }
       }
 
-      // Use 1.10f to ensure we exit even if sensor has small offset
-      bool isQuiet = (filtVertDiff < QUIET_THRESHOLD && filtHorizMag < 1.10f);
-      if (isQuiet) {
-        calmCount++;
-        if (calmCount >= CALM_COUNT) {
-          Serial.println("[*] Shaking subsided → CALMING");
-          state = CALMING; calmCount = 0;
-          digitalWrite(LED_PIN,    LOW);
-          digitalWrite(BUZZER_PIN, LOW);
-          break;
-        }
-      } else {
-        calmCount = 0;
+      // ── KEY FIX: Auto-exit after SWAVE_DISPLAY_MS (10 seconds).
+      // This gives the dashboard exactly 10 seconds to show the event,
+      // then the system resets to NORMAL regardless of sensor readings.
+      if (now - swaveStartTime >= SWAVE_DISPLAY_MS) {
+        Serial.println("[*] 10s display timer expired → resetting to NORMAL");
+        state = NORMAL;
+        resetAllCounters();
+        lcdLine(0, "All Clear       ");
+        lcdLine(1, "Monitoring...   ");
+        beep(1, 500, 0);
+        break;
       }
 
+      // Show remaining display time on LCD
       if (now - lastLcdUpdate >= 500) {
         lcdLine(0, "!! EARTHQUAKE !!");
+        int secLeft = max(0, (int)((SWAVE_DISPLAY_MS - (now - swaveStartTime)) / 1000));
         char buf[17];
-        snprintf(buf, 17, "H:%.2f  V:%.2f  ", filtHorizMag, filtVertDiff);
+        snprintf(buf, 17, "H:%.2f  %2ds left", filtHorizMag, secLeft);
         lcdLine(1, buf);
         lastLcdUpdate = now;
       }
@@ -560,7 +571,7 @@ void loop() {
         if (calmCount >= CALM_COUNT) {
           Serial.println("[*] All clear → NORMAL");
           state = NORMAL;
-          resetAllCounters(); // This resets one-shot beep flags
+          resetAllCounters();
           lcdLine(0, "All Clear       ");
           lcdLine(1, "Monitoring...   ");
           beep(1, 500, 0);
@@ -568,7 +579,9 @@ void loop() {
         }
       } else {
         if (filtHorizMag >= S_WAVE_THRESH) {
-          state = SWAVE_CONFIRMED; calmCount = 0;
+          state = SWAVE_CONFIRMED;
+          swaveStartTime = now;   // ← also set timer on re-entry
+          calmCount = 0;
         } else if (isPWaveSignal()) {
           state = PWAVE_DETECTING; calmCount = 0; pConfirmCount = 0;
         } else {
