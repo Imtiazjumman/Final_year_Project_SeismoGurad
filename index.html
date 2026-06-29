@@ -194,13 +194,8 @@ input[type="range"].page-slider::-webkit-slider-thumb{-webkit-appearance:none;wi
 .btn{background:transparent;border-radius:5px;font-family:var(--font-mono);font-size:.72rem;letter-spacing:2px;cursor:pointer;padding:8px 16px;transition:all .3s;}
 .btn-teal{border:1px solid var(--teal);color:var(--teal);}
 .btn-teal:hover{background:rgba(0,245,212,.1);box-shadow:var(--glow-t);}
-/* ── Clear button — red outline ── */
 .btn-clear{border:1px solid var(--red);color:var(--red);background:transparent;border-radius:5px;font-family:var(--font-mono);font-size:.72rem;letter-spacing:2px;cursor:pointer;padding:8px 16px;transition:all .3s;}
 .btn-clear:hover{background:rgba(255,56,96,.1);box-shadow:var(--glow-r);}
-/* ── 10s reset progress ring shown in hero-left during event ── */
-#resetRing{position:absolute;bottom:0;left:50%;transform:translateX(-50%);font-family:var(--font-mono);font-size:.58rem;color:var(--dim);letter-spacing:1px;display:none;gap:6px;align-items:center;}
-#resetRingBar{width:60px;height:3px;background:var(--muted);border-radius:2px;overflow:hidden;}
-#resetRingFill{height:100%;background:var(--teal);border-radius:2px;transition:width 1s linear;box-shadow:0 0 6px var(--teal);}
 #errToast{display:none;position:fixed;bottom:28px;left:50%;transform:translateX(-50%);z-index:800;background:rgba(20,4,8,.96);border:1px solid var(--red);color:var(--red);font-family:var(--font-mono);font-size:.72rem;padding:12px 24px;border-radius:6px;box-shadow:var(--glow-r);white-space:nowrap;}
 footer{text-align:center;padding:22px;font-family:var(--font-mono);font-size:.65rem;letter-spacing:2px;color:var(--muted);background:rgba(4,8,15,.95);border-top:1px solid var(--border);position:relative;z-index:1;}
 @media(max-width:900px){
@@ -387,11 +382,6 @@ body,header,.nav-tabs,.stat-card,.table-wrap,.chart-card,
           <div class="ring-diff" id="currentDiff">—</div>
         </div>
       </div>
-      <!-- ── 10s countdown bar shown during P/S wave events ── -->
-      <div id="resetRing" style="display:none;flex-direction:column;align-items:center;gap:4px;margin-top:4px;">
-        <div style="font-family:var(--font-mono);font-size:.58rem;color:var(--dim);letter-spacing:1px;">AUTO-RESET IN <span id="resetCountNum" style="color:var(--teal);">10</span>s</div>
-        <div id="resetRingBar"><div id="resetRingFill" style="width:100%;height:3px;background:var(--teal);border-radius:2px;box-shadow:0 0 6px var(--teal);transition:width 1s linear;"></div></div>
-      </div>
       <div style="font-family:var(--font-mono);font-size:.62rem;color:var(--dim);text-align:center;letter-spacing:1px;line-height:1.6;margin-top:4px;">LAST EVENT<br><span id="lastEventTime" style="color:var(--text);">—</span></div>
     </div>
     <div class="hero-center">
@@ -472,7 +462,6 @@ body,header,.nav-tabs,.stat-card,.table-wrap,.chart-card,
         <button class="page-btn" id="nextPageBtn" onclick="changePage(1)">NEXT ▶</button>
         <div class="page-info">Page <span id="pageNum">1</span>/<span id="pageTotal">1</span> &nbsp;|&nbsp; <span id="pageTotalRec">—</span> records</div>
         <button class="btn btn-teal" onclick="exportToCSV()">📥 CSV</button>
-        <!-- ── CLEAR button — calls clear.php, resets DB and ID counter ── -->
         <button class="btn-clear" onclick="clearAllRecords()">🗑 CLEAR ALL</button>
       </div>
     </div>
@@ -507,7 +496,7 @@ body,header,.nav-tabs,.stat-card,.table-wrap,.chart-card,
       <div class="arch-step"><div class="arch-num">01</div><div class="arch-icon">📡</div><div class="arch-name">Hardware Node</div><div class="arch-desc">ESP32 + MPU6050 at 10Hz. STA/LTA on Z-axis. UDP throttled: NORMAL 2s, WARNING 2s, EARTHQUAKE 5s.</div></div>
       <div class="arch-step"><div class="arch-num">02</div><div class="arch-icon">🧠</div><div class="arch-name">Edge Logic</div><div class="arch-desc">5-state machine: NORMAL → DETECTING → PWAVE → SWAVE → CALMING. S-wave locked for full 15s P window.</div></div>
       <div class="arch-step"><div class="arch-num">03</div><div class="arch-icon">🐍</div><div class="arch-name">Middleware</div><div class="arch-desc">Python receiver with 10s cooldown per status — double-layer flood protection keeps DB rows manageable.</div></div>
-      <div class="arch-step"><div class="arch-num">04</div><div class="arch-icon">🖥</div><div class="arch-name">Dashboard</div><div class="arch-desc">10s front-end auto-reset to cyan after any event. Alert modal one-shot — no re-fire on every 3s refresh.</div></div>
+      <div class="arch-step"><div class="arch-num">04</div><div class="arch-icon">🖥</div><div class="arch-name">Dashboard</div><div class="arch-desc">Alert modal stays visible until user acknowledges. Status resets only when API returns NORMAL naturally.</div></div>
     </div>
   </div>
   <div class="info-section">
@@ -546,17 +535,10 @@ let historyTotal   = 1;
 let pwaveActive    = false;
 let pwaveStartTime = null;
 let pwaveTimer     = null;
-const PWAVE_WINDOW_S = 15;   // matches new P_TO_S_SECS in firmware
+const PWAVE_WINDOW_S = 15;
 
 // Alert modal one-shot flag
 let alertModalActive = false;
-
-// ── NEW: 10-second front-end auto-reset timer ─────────────────────────────
-// After a P or S wave event is detected on the dashboard, this timer fires
-// after 10 seconds and resets all visuals back to cyan NORMAL state.
-// This runs independently of the 3s API poll — it always fires at exactly 10s.
-let statusResetTimer    = null;   // setTimeout handle
-let resetCountdownTimer = null;   // setInterval handle for the bar/counter UI
 
 // Clock
 function updateClock() {
@@ -607,7 +589,7 @@ function playAlert(type){
   }catch(e){}
 }
 
-// P-wave banner
+// ── FIX 1: dismissPWave now resets waveColor and waveTargetAmp to NORMAL ──
 function showPWaveBanner(){
   if(pwaveActive)return;
   pwaveActive=true; pwaveStartTime=Date.now();
@@ -627,6 +609,9 @@ function dismissPWave(){
   document.getElementById('pwaveBanner').style.display='none';
   document.getElementById('pwaveCountNum').textContent=PWAVE_WINDOW_S;
   document.getElementById('pwaveBar').style.width='100%';
+  // FIXED: always snap waveform back to teal/normal when banner is dismissed
+  waveColor='#00f5d4';
+  waveTargetAmp=6;
 }
 
 // Earthquake modal
@@ -642,74 +627,6 @@ function dismissAlert(){
   alertModalActive=false;
   document.getElementById('alertOverlay').style.display='none';
   document.getElementById('alertModal').classList.remove('show');
-}
-
-// ── 10-second auto-reset to cyan ─────────────────────────────────────────
-// Called when P or S wave is first detected.
-// Starts a 10s countdown — at the end it forces all dashboard visuals back
-// to NORMAL (cyan) regardless of the next API poll result.
-const RESET_SECS = 10;
-
-function startStatusResetTimer() {
-  // Cancel any running timer first
-  if (statusResetTimer)    { clearTimeout(statusResetTimer);  statusResetTimer    = null; }
-  if (resetCountdownTimer) { clearInterval(resetCountdownTimer); resetCountdownTimer = null; }
-
-  // Show the countdown bar in the hero-left panel
-  const resetRing    = document.getElementById('resetRing');
-  const resetNum     = document.getElementById('resetCountNum');
-  const resetFill    = document.getElementById('resetRingFill');
-  resetRing.style.display = 'flex';
-  resetNum.textContent    = RESET_SECS;
-  resetFill.style.width   = '100%';
-
-  const startTs = Date.now();
-
-  // Update the bar + number every second
-  resetCountdownTimer = setInterval(() => {
-    const elapsed = (Date.now() - startTs) / 1000;
-    const rem     = Math.max(0, RESET_SECS - elapsed);
-    resetNum.textContent  = Math.ceil(rem);
-    resetFill.style.width = ((rem / RESET_SECS) * 100) + '%';
-  }, 1000);
-
-  // Fire the actual reset after 10s
-  statusResetTimer = setTimeout(() => {
-    resetUIToNormal();
-  }, RESET_SECS * 1000);
-}
-
-function cancelStatusResetTimer() {
-  if (statusResetTimer)    { clearTimeout(statusResetTimer);     statusResetTimer    = null; }
-  if (resetCountdownTimer) { clearInterval(resetCountdownTimer); resetCountdownTimer = null; }
-  document.getElementById('resetRing').style.display = 'none';
-}
-
-// Resets ALL dashboard visuals back to the cyan NORMAL state.
-// Called automatically after 10s, or immediately when API returns NORMAL.
-function resetUIToNormal() {
-  cancelStatusResetTimer();
-
-  waveTargetAmp = 6;
-  waveColor     = '#00f5d4';
-
-  updateRing('NORMAL');
-  updateGauge(0.03);
-
-  document.getElementById('currentStatus').textContent = 'NORMAL';
-  document.getElementById('currentWave').textContent   = 'NOMINAL';
-  document.getElementById('currentDiff').textContent   = '0.0000 g';
-  document.getElementById('waveStatus').textContent    = 'NOMINAL';
-  document.getElementById('waveStatus').style.color    = 'var(--teal)';
-  document.getElementById('waveAmp').textContent       = 'LOW';
-  document.getElementById('waveHoriz').textContent     = 'LOW';
-  document.getElementById('waveRatio').textContent     = '<4.0';
-
-  // If the P-wave banner is still up, close it
-  dismissPWave();
-
-  // Don't auto-dismiss the earthquake modal — user must acknowledge it
-  document.getElementById('alertOverlay').style.display = 'none';
 }
 
 // Counter animation
@@ -828,15 +745,11 @@ function severityBar(diff){
   return `<div style="display:flex;align-items:center;gap:8px;"><div style="width:60px;height:4px;background:var(--muted);border-radius:2px;overflow:hidden;"><div style="width:${pct}%;height:100%;background:${col};border-radius:2px;"></div></div><span style="font-size:.68rem;color:${col};">${pct.toFixed(0)}%</span></div>`;
 }
 
-// ── buildRow: uses sequential row number (displayNum) instead of raw DB ID ──
-// This prevents the "bug #4249" appearance from old flooded records.
-// Dashboard passes (i+1); history passes the calculated absolute row number.
 function buildRow(r, i, displayNum){
   const diff=parseFloat(r.diff_value),isEQ=r.status==='EARTHQUAKE!',isWA=r.status==='WARNING';
   const bClass=isEQ?'EARTHQUAKE':isWA?'WARNING':'NORMAL';
   const waveType=isEQ?`<span style="font-family:var(--font-mono);font-size:.65rem;color:var(--red);">🌍 S-WAVE</span>`:isWA?`<span style="font-family:var(--font-mono);font-size:.65rem;color:var(--amber);">⚡ P-WAVE</span>`:`<span style="font-family:var(--font-mono);font-size:.65rem;color:var(--dim);">— NORMAL</span>`;
   const label=isEQ?'⚠ EARTHQUAKE':isWA?'⚡ WARNING':'✔ NORMAL';
-  // Display sequential number; fall back to DB id if displayNum not provided
   const rowLabel = displayNum !== undefined ? displayNum : r.id;
   return `<tr style="animation-delay:${(i%10)*0.04}s"><td style="color:var(--muted);font-size:.72rem;">#${rowLabel}</td><td>${waveType}</td><td><span class="badge ${bClass}"><span class="badge-dot"></span>${label}</span></td><td style="color:${isEQ?'var(--red)':isWA?'var(--amber)':'var(--teal)'};">${diff.toFixed(4)}</td><td style="color:var(--dim);font-size:.75rem;">${r.recorded_at}</td><td>${severityBar(diff)}</td></tr>`;
 }
@@ -894,37 +807,40 @@ function fetchData(){
         document.getElementById('waveHoriz').textContent=st==='EARTHQUAKE!'?'HIGH':st==='WARNING'?'MED':'LOW';
         document.getElementById('waveRatio').textContent=st==='EARTHQUAKE!'?'>4.0':st==='WARNING'?'≥4.0':'<4.0';
         updateRing(st); updateGauge(diff);
-        waveTargetAmp=st==='EARTHQUAKE!'?38:st==='WARNING'?20:6;
-        waveColor=st==='EARTHQUAKE!'?'#ff3860':st==='WARNING'?'#f5a623':'#00f5d4';
 
-        // ── KEY FIX: 10-second auto-reset timer ───────────────────────
-        // When a WARNING or EARTHQUAKE status is detected, start (or restart)
-        // the 10s countdown. After 10s the waveform and all status indicators
-        // snap back to cyan NORMAL — matching the firmware's SWAVE_DISPLAY_MS.
-        // When the API returns NORMAL, cancel the timer and reset immediately.
-        if (st === 'WARNING' || st === 'EARTHQUAKE!') {
-          // Only start the timer once per NEW event (same logic as modal one-shot)
-          if (!statusResetTimer) {
-            startStatusResetTimer();
+        // ── FIX 2 + 3: waveform color tied to actual banner state ──
+        if(st==='EARTHQUAKE!'){
+          waveTargetAmp=38;
+          waveColor='#ff3860';
+        } else if(st==='WARNING'){
+          // FIX 3: only stay yellow while the P-wave banner is actively counting down.
+          // If the banner was already dismissed/timed out, revert to teal even if the
+          // API keeps returning WARNING — prevents permanent yellow waveform.
+          if(pwaveActive){
+            waveTargetAmp=20;
+            waveColor='#f5a623';
+          } else {
+            waveTargetAmp=6;
+            waveColor='#00f5d4';
           }
-        } else if (st === 'NORMAL') {
-          // API already says NORMAL — cancel the timer and reset right away
-          if (statusResetTimer) {
-            resetUIToNormal();
-          }
+        } else {
+          // NORMAL — force waveform back to teal regardless of prior state
+          waveTargetAmp=6;
+          waveColor='#00f5d4';
+          // also auto-dismiss any lingering P-wave banner
+          if(pwaveActive) dismissPWave();
         }
-        // ──────────────────────────────────────────────────────────────
 
-        // P-wave banner
-        if(newWarn>prevWarnCount&&newWarn>0&&st==='WARNING')showPWaveBanner();
+        // P-wave banner: only show on a new warning event
+        if(newWarn>prevWarnCount&&newWarn>0&&st==='WARNING') showPWaveBanner();
 
-        // Earthquake modal — only fire if not already showing
+        // Earthquake modal — only fire once per new event
         if(newQuake>prevQuakeCount&&newQuake>0&&!alertModalActive){
           showAlert(diff);
           showNotif();
         }
 
-        // Clear red overlay when not in earthquake state
+        // Clear red overlay only when not in earthquake state
         if(st!=='EARTHQUAKE!'){
           document.getElementById('alertOverlay').style.display='none';
           if(alertModalActive&&st==='NORMAL'){
@@ -934,8 +850,6 @@ function fetchData(){
           }
         }
 
-        if(st==='NORMAL'&&pwaveActive)dismissPWave();
-
         prevQuakeCount=newQuake;
         prevWarnCount =newWarn;
       }
@@ -944,7 +858,6 @@ function fetchData(){
         const emp=`<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--dim);">NO EVENTS RECORDED</td></tr>`;
         document.getElementById('dashTableBody').innerHTML=emp;return;
       }
-      // ── Pass sequential display number (1,2,3…) instead of DB ID ──
       const rows=data.records.map((r,i)=>buildRow(r,i,i+1));
       document.getElementById('dashTableBody').innerHTML=rows.slice(0,5).join('');
 
@@ -1000,9 +913,6 @@ function fetchHistory(page){
       updatePagerUI();
       if(!data.records||!data.records.length){tbody.innerHTML=`<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--dim);">NO RECORDS</td></tr>`;return;}
       globalRecords=data.records;
-      // ── Sequential row numbers across pages ──
-      // Row 1 on page 2 (10 per page) = #11, etc.
-      // api.php sets $perPage = 50 — must match exactly for correct row numbers
       const ROWS_PER_PAGE = 50;
       const pageOffset    = (page - 1) * ROWS_PER_PAGE;
       tbody.innerHTML=data.records.map((r,i)=>buildRow(r,i,pageOffset+i+1)).join('');
@@ -1010,7 +920,7 @@ function fetchHistory(page){
     .catch(()=>{tbody.innerHTML=`<tr><td colspan="6" style="text-align:center;padding:28px;color:var(--red);">Cannot reach api.php</td></tr>`;});
 }
 
-// ── Clear all records — calls clear.php, truncates DB, resets ID to 1 ─────
+// Clear all records
 function clearAllRecords(){
   if(!confirm('Delete ALL seismic records and reset ID counter to 1?\nThis cannot be undone.'))return;
   fetch('clear.php')
@@ -1018,7 +928,6 @@ function clearAllRecords(){
     .then(d=>{
       if(d.success){
         showErrToast('✔ Records cleared — ID counter reset to 1');
-        // Refresh history and dashboard
         fetchHistory(1);
         fetchData();
         historyPage=1;
@@ -1038,7 +947,6 @@ function runDemo(){
   waveTargetAmp=20;waveColor='#f5a623';
   updateRing('WARNING');updateGauge(0.824);
   showPWaveBanner();
-  startStatusResetTimer();  // start the 10s visual reset timer
 
   setTimeout(()=>{
     dismissPWave();
@@ -1049,14 +957,7 @@ function runDemo(){
     waveTargetAmp=38;waveColor='#ff3860';
     updateRing('EARTHQUAKE!');updateGauge(1.1851);
     if(!alertModalActive)showAlert(1.1851);
-    // Restart 10s reset timer from when S-wave is confirmed
-    startStatusResetTimer();
   },15000);
-
-  setTimeout(()=>{
-    dismissAlert();
-    // Auto-reset fires at 10s from S-wave confirmation
-  },21000);
 }
 
 // CSV export
@@ -1077,7 +978,7 @@ document.addEventListener('keydown',e=>{
   if(e.key==='s'||e.key==='S')toggleSound();
 });
 
-// ── Theme toggle ───────────────────────────────────────────────────────────
+// Theme toggle
 function toggleTheme(){
   const isLight = document.body.getAttribute('data-theme') === 'light';
   const next    = isLight ? 'dark' : 'light';

@@ -21,7 +21,7 @@ $perPage = 50;
 $page    = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
 $offset  = ($page - 1) * $perPage;
 
-// ── Total record count (needed to calculate total pages) ─────────────────────
+// ── Total record count ────────────────────────────────────────────────────────
 $countResult = $conn->query("SELECT COUNT(*) AS cnt FROM seismic_data");
 if (!$countResult) {
     echo json_encode(["error" => "Count query failed", "message" => $conn->error]);
@@ -31,7 +31,6 @@ $countRow     = $countResult->fetch_assoc();
 $totalRecords = (int)($countRow['cnt'] ?? 0);
 $totalPages   = max(1, (int)ceil($totalRecords / $perPage));
 
-// Clamp page to valid range
 if ($page > $totalPages) $page = $totalPages;
 $offset = ($page - 1) * $perPage;
 
@@ -53,7 +52,7 @@ while ($row = $result->fetch_assoc()) {
     $rows[] = $row;
 }
 
-// ── Stats (always based on full table, not just current page) ─────────────────
+// ── Stats ─────────────────────────────────────────────────────────────────────
 $statsSql = "SELECT
     COUNT(*)                                    AS total,
     IFNULL(SUM(status = 'WARNING'),    0)       AS warnings,
@@ -75,13 +74,42 @@ $stats = [
     "max_diff"    => (float)($statsRaw["max_diff"]    ?? 0),
 ];
 
+// ── Active alert — the key fix for 15s frontend display ──────────────────────
+// Returns the most recent WARNING or EARTHQUAKE! row whose alert_until
+// timestamp is still in the future. The frontend uses this to keep the
+// banner/modal alive for the full 15 seconds across every 3s poll cycle.
+// If alert_until column does not exist yet, falls back to null gracefully.
+$activeAlert = null;
+$alertSql = "SELECT status, diff_value,
+                    DATE_FORMAT(alert_until, '%Y-%m-%dT%H:%i:%s') AS alert_until
+             FROM seismic_data
+             WHERE alert_until > NOW()
+               AND status IN ('WARNING', 'EARTHQUAKE!')
+             ORDER BY recorded_at DESC
+             LIMIT 1";
+
+$alertResult = $conn->query($alertSql);
+if ($alertResult) {
+    $alertRow = $alertResult->fetch_assoc();
+    if ($alertRow) {
+        $activeAlert = [
+            "status"      => $alertRow["status"],
+            "diff_value"  => (float)$alertRow["diff_value"],
+            "alert_until" => $alertRow["alert_until"],   // ISO string for JS Date()
+        ];
+    }
+}
+// If the column doesn't exist the query returns false — $activeAlert stays null.
+// No error is thrown so the rest of the response still works.
+
 // ── Response ──────────────────────────────────────────────────────────────────
 echo json_encode([
     "records"       => $rows,
     "stats"         => $stats,
-    "page"          => $page,          // current page number
-    "total_pages"   => $totalPages,    // total pages available
-    "total_records" => $totalRecords,  // total rows in table
+    "active_alert"  => $activeAlert,   // null when no active event
+    "page"          => $page,
+    "total_pages"   => $totalPages,
+    "total_records" => $totalRecords,
 ]);
 
 $conn->close();
